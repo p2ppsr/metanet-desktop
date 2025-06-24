@@ -27,6 +27,12 @@ import {
 } from '@bsv/sdk';
 import { listen, emit } from '@tauri-apps/api/event'
 
+
+// Parse the origin header and turn it into a fqdn (e.g. projectbabbage.com:8080)
+function parseOrigin(origin: string): string {
+  return new URL(origin).host
+}
+
 export const onWalletReady = async (wallet: WalletInterface): Promise<(() => void) | undefined> => {
   return await listen('http-request', async (event) => {
     let response
@@ -54,13 +60,15 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         return
       }
 
+      const origin = parseOrigin(req.headers['origin'])
+
       switch (req.path) {
         // 1. createAction
         case '/createAction': {
           try {
             const args = JSON.parse(req.body) as CreateActionArgs;
 
-            const result = await wallet.createAction(args, req.headers['origin'])
+            const result = await wallet.createAction(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -100,7 +108,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as SignActionArgs
 
-            const result = await wallet.signAction(args, req.headers['origin'])
+            const result = await wallet.signAction(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -139,7 +147,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as AbortActionArgs
 
-            const result = await wallet.abortAction(args, req.headers['origin'])
+            const result = await wallet.abortAction(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -163,7 +171,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as ListActionsArgs
 
-            const result = await wallet.listActions(args, req.headers['origin'])
+            const result = await wallet.listActions(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -187,7 +195,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as InternalizeActionArgs
 
-            const result = await wallet.internalizeAction(args, req.headers['origin'])
+            const result = await wallet.internalizeAction(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -226,7 +234,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as ListOutputsArgs
 
-            const result = await wallet.listOutputs(args, req.headers['origin'])
+            const result = await wallet.listOutputs(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -250,7 +258,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as RelinquishOutputArgs
 
-            const result = await wallet.relinquishOutput(args, req.headers['origin'])
+            const result = await wallet.relinquishOutput(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -274,7 +282,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as GetPublicKeyArgs
 
-            const result = await wallet.getPublicKey(args, req.headers['origin'])
+            const result = await wallet.getPublicKey(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -298,7 +306,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as RevealCounterpartyKeyLinkageArgs
 
-            const result = await wallet.revealCounterpartyKeyLinkage(args, req.headers['origin'])
+            const result = await wallet.revealCounterpartyKeyLinkage(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -322,7 +330,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as RevealSpecificKeyLinkageArgs
 
-            const result = await wallet.revealSpecificKeyLinkage(args, req.headers['origin'])
+            const result = await wallet.revealSpecificKeyLinkage(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -346,7 +354,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as WalletEncryptArgs
 
-            const result = await wallet.encrypt(args, req.headers['origin'])
+            const result = await wallet.encrypt(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -370,7 +378,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as WalletDecryptArgs
 
-            const result = await wallet.decrypt(args, req.headers['origin'])
+            const result = await wallet.decrypt(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -394,7 +402,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as CreateHmacArgs
 
-            const result = await wallet.createHmac(args, req.headers['origin'])
+            const result = await wallet.createHmac(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -418,7 +426,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as VerifyHmacArgs
 
-            const result = await wallet.verifyHmac(args, req.headers['origin'])
+            const result = await wallet.verifyHmac(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -442,7 +450,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as CreateSignatureArgs
 
-            const result = await wallet.createSignature(args, req.headers['origin'])
+            const result = await wallet.createSignature(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -466,7 +474,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as VerifySignatureArgs
 
-            const result = await wallet.verifySignature(args, req.headers['origin'])
+            const result = await wallet.verifySignature(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -490,7 +498,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as AcquireCertificateArgs
 
-            const result = await wallet.acquireCertificate(args, req.headers['origin'])
+            const result = await wallet.acquireCertificate(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -514,7 +522,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as ListCertificatesArgs
 
-            const result = await wallet.listCertificates(args, req.headers['origin'])
+            const result = await wallet.listCertificates(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -538,7 +546,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as ProveCertificateArgs
 
-            const result = await wallet.proveCertificate(args, req.headers['origin'])
+            const result = await wallet.proveCertificate(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -562,7 +570,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as RelinquishCertificateArgs
 
-            const result = await wallet.relinquishCertificate(args, req.headers['origin'])
+            const result = await wallet.relinquishCertificate(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -586,7 +594,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as DiscoverByIdentityKeyArgs
 
-            const result = await wallet.discoverByIdentityKey(args, req.headers['origin'])
+            const result = await wallet.discoverByIdentityKey(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -610,7 +618,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as DiscoverByAttributesArgs
 
-            const result = await wallet.discoverByAttributes(args, req.headers['origin'])
+            const result = await wallet.discoverByAttributes(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -632,7 +640,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         // 23. isAuthenticated
         case '/isAuthenticated': {
           try {
-            const result = await wallet.isAuthenticated({}, req.headers['origin'])
+            const result = await wallet.isAuthenticated({}, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -654,7 +662,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         // 24. waitForAuthentication
         case '/waitForAuthentication': {
           try {
-            const result = await wallet.waitForAuthentication({}, req.headers['origin'])
+            const result = await wallet.waitForAuthentication({}, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -676,7 +684,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         // 25. getHeight
         case '/getHeight': {
           try {
-            const result = await wallet.getHeight({}, req.headers['origin'])
+            const result = await wallet.getHeight({}, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -700,7 +708,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
           try {
             const args = JSON.parse(req.body) as GetHeaderArgs
 
-            const result = await wallet.getHeaderForHeight(args, req.headers['origin'])
+            const result = await wallet.getHeaderForHeight(args, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -722,7 +730,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         // 27. getNetwork
         case '/getNetwork': {
           try {
-            const result = await wallet.getNetwork({}, req.headers['origin'])
+            const result = await wallet.getNetwork({}, origin)
             response = {
               request_id: req.request_id,
               status: 200,
@@ -744,7 +752,7 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
         // 28. getVersion
         case '/getVersion': {
           try {
-            const result = await wallet.getVersion({}, req.headers['origin'])
+            const result = await wallet.getVersion({}, origin)
             response = {
               request_id: req.request_id,
               status: 200,
