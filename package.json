@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev-ui": "vite --config vite.config.dev-ui.ts",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri-ui-dev": "tauri dev --config src-tauri/tauri.ui-dev.conf.json",
     "release-version": "node update-version.js"
   },
   "dependencies": {
