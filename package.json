@@ -1,7 +1,7 @@
 {
   "name": "metanet-desktop",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,9 +14,9 @@
     "clean": "rm -rf node_modules dist src-tauri/target .vite .cache package-lock.json yarn.lock pnpm-lock.yaml && cd src-tauri && cargo clean || true"
   },
   "dependencies": {
-    "@bsv/brc100-ui-react-components": "^0.1.14",
-    "@bsv/sdk": "^1.6.17",
-    "@bsv/wallet-toolbox-client": "^1.5.16",
+    "@bsv/brc100-ui-react-components": "^0.1.15",
+    "@bsv/sdk": "^1.6.18",
+    "@bsv/wallet-toolbox-client": "^1.5.17",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mui/icons-material": "^6.4.3",
