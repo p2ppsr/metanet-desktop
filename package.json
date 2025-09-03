@@ -14,9 +14,9 @@
     "clean": "rm -rf node_modules dist src-tauri/target .vite .cache package-lock.json yarn.lock pnpm-lock.yaml && cd src-tauri && cargo clean || true"
   },
   "dependencies": {
-    "@bsv/brc100-ui-react-components": "^0.2.1",
-    "@bsv/sdk": "^1.6.22",
-    "@bsv/wallet-toolbox-client": "^1.5.20",
+    "@bsv/brc100-ui-react-components": "^0.2.2",
+    "@bsv/sdk": "^1.6.25",
+    "@bsv/wallet-toolbox-client": "^1.6.19",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mui/icons-material": "^6.4.3",
