@@ -14,7 +14,7 @@
   <categories>
     <category>Utility</category>
   </categories>
-  <url type="homepage">https://github.com/bitcoin-sv/bsv-desktop</url>
+  <url type="homepage">https://github.com/bsv-blockchain/metanet-desktop</url>
   <provides>
     <binary>bsv-desktop</binary>
   </provides>

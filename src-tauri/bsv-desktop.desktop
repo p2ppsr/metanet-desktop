@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Name=BSV-Desktop
-Comment=Bitcoin SV Desktop Application
+Comment=BSV Desktop Application
 Exec=bsv-desktop
 Icon=bsv-desktop
 Terminal=false
