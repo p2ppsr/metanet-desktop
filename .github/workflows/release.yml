@@ -89,8 +89,8 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.METANET_APPLE_CERTIFICATE }}
           APPLE_SIGNING_IDENTITY: ${{ steps.verify_certificate.outputs.cert_id }}
         with:
-          tagName: metanet-desktop-v__VERSION__
-          releaseName: "Metanet-Desktop-v__VERSION__"
+          tagName: bsv-desktop-v__VERSION__
+          releaseName: "BSV-Desktop-v__VERSION__"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
@@ -104,12 +104,12 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
           mkdir -p AppDir/usr/share/metainfo
-          cp src-tauri/target/release/metanet-desktop AppDir/usr/bin/
-          cp src-tauri/metanet-desktop.desktop AppDir/usr/share/applications/
-          cp src-tauri/org.bsvblockchain.metanetdesktop.metainfo.xml AppDir/usr/share/metainfo/
-          cp src-tauri/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/metanet-desktop.png
+          cp src-tauri/target/release/bsv-desktop AppDir/usr/bin/
+          cp src-tauri/bsv-desktop.desktop AppDir/usr/share/applications/
+          cp src-tauri/org.bsvblockchain.bsvdesktop.metainfo.xml AppDir/usr/share/metainfo/
+          cp src-tauri/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/bsv-desktop.png
           # Set executable permissions
-          chmod +x AppDir/usr/bin/metanet-desktop
+          chmod +x AppDir/usr/bin/bsv-desktop
 
       - name: Download linuxdeploy AppImage
         if: matrix.platform == 'ubuntu-22.04'
@@ -126,8 +126,8 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage --icon-file=AppDir/usr/share/icons/hicolor/128x128/apps/metanet-desktop.png --desktop-file=AppDir/usr/share/applications/metanet-desktop.desktop
-          mv Metanet-Desktop-x86_64.AppImage metanet-desktop-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage --icon-file=AppDir/usr/share/icons/hicolor/128x128/apps/bsv-desktop.png --desktop-file=AppDir/usr/share/applications/bsv-desktop.desktop
+          mv BSV-Desktop-x86_64.AppImage bsv-desktop-x86_64.AppImage
 
       - name: Import GPG Key for Linux Signing
         if: matrix.platform == 'ubuntu-22.04'
@@ -139,12 +139,12 @@ jobs:
       - name: Sign AppImage with GPG
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          gpg --detach-sign --armor metanet-desktop-x86_64.AppImage
+          gpg --detach-sign --armor bsv-desktop-x86_64.AppImage
 
       - name: Create and Sign SHA256SUMS
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sha256sum metanet-desktop-x86_64.AppImage > SHA256SUMS
+          sha256sum bsv-desktop-x86_64.AppImage > SHA256SUMS
           gpg --detach-sign --armor SHA256SUMS
 
       - name: Upload Linux Artifacts
@@ -153,8 +153,8 @@ jobs:
         with:
           name: linux-artifacts
           path: |
-            metanet-desktop-x86_64.AppImage
-            metanet-desktop-x86_64.AppImage.asc
+            bsv-desktop-x86_64.AppImage
+            bsv-desktop-x86_64.AppImage.asc
             SHA256SUMS
             SHA256SUMS.asc
 
