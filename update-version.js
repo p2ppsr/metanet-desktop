@@ -42,7 +42,7 @@ const filesToUpdate = [
     }
   },
   {
-    path: 'src-tauri/metanet-desktop.appdata.xml',
+    path: 'src-tauri/bsv-desktop.appdata.xml',
     update: (content) => {
       // Update both version and release date
       const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD

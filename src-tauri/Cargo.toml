@@ -1,6 +1,6 @@
 [package]
-name = "metanet-desktop"
-version = "0.6.3"
+name = "bsv-desktop"
+version = "0.6.4"
 description = "An example desktop wallet"
 authors = ["you"]
 edition = "2021"
@@ -11,12 +11,12 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "metanet_desktop_lib"
+name = "bsv_desktop_lib"
 path = "src/lib.rs"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "metanet-desktop"
+name = "bsv-desktop"
 path = "src/main.rs"
 
 [build-dependencies]

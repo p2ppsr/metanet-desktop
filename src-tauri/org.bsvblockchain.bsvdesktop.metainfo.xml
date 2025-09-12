@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>org.bsvblockchain.metanetdesktop</id>
+  <id>org.bsvblockchain.bsvdesktop</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
-  <name>Metanet-Desktop</name>
-  <summary>BSV Blockchain Metanet Desktop Application</summary>
+  <name>BSV-Desktop</name>
+  <summary>BSV Blockchain Desktop Application</summary>
   <description>
     <p>
-      A desktop application for interacting with the Metanet using BSV Blockchain.
+      A desktop application for interacting with the BSV Blockchain.
       Provides tools for managing digital identities, certificates, and blockchain interactions.
     </p>
   </description>
   <categories>
     <category>Utility</category>
   </categories>
-  <url type="homepage">https://github.com/bitcoin-sv/metanet-desktop</url>
+  <url type="homepage">https://github.com/bsv-blockchain/metanet-desktop</url>
   <provides>
-    <binary>metanet-desktop</binary>
+    <binary>bsv-desktop</binary>
   </provides>
   <releases>
     <release version="0.2.4" date="2025-04-01"/>
