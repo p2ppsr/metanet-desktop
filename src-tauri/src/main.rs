@@ -19,6 +19,8 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server, StatusCode,
 };
+use reqwest::Client;
+use url::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Listener, Window};
 use tokio::sync::oneshot;
@@ -47,6 +49,52 @@ async fn save_file(path: String, contents: Vec<u8>) -> Result<(), String> {
 
     println!("File saved successfully");
     Ok(())
+}
+
+#[derive(Serialize)]
+struct ProxyFetchResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+#[tauri::command]
+async fn proxy_fetch_manifest(url: String) -> Result<ProxyFetchResponse, String> {
+    let parsed = Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("only https scheme is allowed".into());
+    }
+    let path = parsed.path().to_ascii_lowercase();
+    if !(path.ends_with("/manifest.json") || path == "/manifest.json") {
+        return Err("only manifest.json paths are allowed".into());
+    }
+
+    // Perform request
+    let client = Client::builder()
+        .user_agent("metanet-desktop/1.0 (+https://github.com/bsv-blockchain/metanet-desktop)")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get(parsed)
+        .header(reqwest::header::ACCEPT, "application/json, */*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = resp.status().as_u16();
+    let mut headers_vec: Vec<(String, String)> = Vec::new();
+    for (k, v) in resp.headers().iter() {
+        headers_vec.push((
+            k.as_str().to_string(),
+            v.to_str().unwrap_or("").to_string(),
+        ));
+    }
+
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+
+    Ok(ProxyFetchResponse { status, headers: headers_vec, body })
 }
 
 static MAIN_WINDOW_NAME: &str = "main";
@@ -470,22 +518,20 @@ fn main() {
                 });
             });
 
-            // The macOS dock click handling is now done directly in the RunEvent::Reopen handler below
-            // No additional event listeners are needed here
 
-            Ok(())
-        })
-        // IMPORTANT: Register our Tauri commands here
-        .invoke_handler(tauri::generate_handler![
-            is_focused,
-            request_focus,
-            relinquish_focus,
-            download,
-            save_file
-        ])
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .run(tauri::generate_context!())
-        .expect("Error while running Tauri application");
-}
+        Ok(())
+    })
+    .invoke_handler(tauri::generate_handler![
+        is_focused,
+        request_focus,
+        relinquish_focus,
+        download,
+        save_file,
+        proxy_fetch_manifest
+    ])
+    .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_dialog::init())
+    .run(tauri::generate_context!())
+    .expect("Error while running Tauri application");
+    }
