@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Metanet Desktop",
-  "identifier": "com.metanet-desktop.app",
-  "version": "0.6.0",
+  "productName": "BSV Desktop",
+  "identifier": "com.bsv-desktop.app",
+  "version": "0.6.4",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Metanet Desktop",
+        "title": "BSV Desktop",
         "width": 1620,
         "height": 1000
       }

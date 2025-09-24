@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Name=Metanet-Desktop
-Comment=Bitcoin SV Metanet Desktop Application
-Exec=metanet-desktop
-Icon=metanet-desktop
-Terminal=false
-Type=Application
-Categories=Utility;

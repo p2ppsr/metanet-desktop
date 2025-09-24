@@ -33,7 +33,7 @@ if (rootElement) {
             onWalletReady={onWalletReady}
             nativeHandlers={tauriFunctions}
             appVersion={packageJson.version}
-            appName="Metanet Desktop"
+            appName="BSV Desktop"
           />
         </ErrorBoundary>
         <ToastContainer
