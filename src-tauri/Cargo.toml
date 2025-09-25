@@ -1,6 +1,6 @@
 [package]
 name = "bsv-desktop"
-version = "0.6.4"
+version = "0.6.5"
 description = "An example desktop wallet"
 authors = ["you"]
 edition = "2021"
