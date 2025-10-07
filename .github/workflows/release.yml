@@ -59,7 +59,7 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.METANET_APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.METANET_KEYCHAIN_PASSWORD }}
         run: |
-          echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+          echo "$APPLE_CERTIFICATE" | (base64 -d 2>/dev/null || base64 --decode 2>/dev/null || base64 -D) > certificate.p12
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
@@ -71,12 +71,22 @@ jobs:
       - name: verify certificate
         if: matrix.platform == 'macos-latest'
         id: verify_certificate
+        env:
+          APPLE_TEAM_ID: ${{ secrets.METANET_APPLE_TEAM_ID }}
         run: |
-          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "BSV")
+          security find-identity -v -p codesigning build.keychain || true
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "$APPLE_TEAM_ID" | head -n1)
+          if [ -z "$CERT_INFO" ]; then
+            CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -n1)
+          fi
+          if [ -z "$CERT_INFO" ]; then
+            echo "No suitable code signing identity found in build.keychain."
+            exit 1
+          fi
           echo "CERT_INFO=$CERT_INFO"
-          CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+          CERT_ID=$(echo "$CERT_INFO" | awk -F'\"' '{print $2}')
           echo "cert_id=$CERT_ID" >> $GITHUB_OUTPUT
-          echo "Certificate imported."
+          echo "Certificate imported and identity resolved."
 
       - name: build and publish
         uses: tauri-apps/tauri-action@v0
