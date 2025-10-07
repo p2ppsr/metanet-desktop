@@ -75,18 +75,21 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.METANET_APPLE_TEAM_ID }}
         run: |
           security find-identity -v -p codesigning build.keychain || true
-          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "$APPLE_TEAM_ID" | head -n1)
+          # First, try to find a Developer ID Application identity that matches the Team ID
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | grep "$APPLE_TEAM_ID" | head -n1)
+          # Next, try any Developer ID Application identity (without Team ID match)
           if [ -z "$CERT_INFO" ]; then
             CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -n1)
           fi
+          # If still not found, fail clearly (Apple Distribution is not valid for outside-App-Store notarization)
           if [ -z "$CERT_INFO" ]; then
-            echo "No suitable code signing identity found in build.keychain."
+            echo "No 'Developer ID Application' identity found in build.keychain. Ensure the METANET_APPLE_CERTIFICATE contains a Developer ID Application certificate (not Apple Distribution)." >&2
             exit 1
           fi
           echo "CERT_INFO=$CERT_INFO"
           CERT_ID=$(echo "$CERT_INFO" | awk -F'\"' '{print $2}')
           echo "cert_id=$CERT_ID" >> $GITHUB_OUTPUT
-          echo "Certificate imported and identity resolved."
+          echo "Certificate imported and identity resolved to Developer ID Application."
 
       - name: build and publish
         uses: tauri-apps/tauri-action@v0
