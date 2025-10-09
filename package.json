@@ -25,16 +25,23 @@
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.2.1",
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
     "date-fns": "^4.1.0",
+    "events": "^3.3.0",
     "fuse.js": "^7.1.0",
     "iso-3166-ts": "^2.2.0",
     "jdenticon": "^3.3.0",
     "libphonenumber-js": "^1.12.6",
+    "pbkdf2": "^3.1.5",
+    "process": "^0.11.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-phone-number-input": "^3.4.12",
     "react-router-dom": "^5.2.0",
-    "react-toastify": "^11.0.3"
+    "react-toastify": "^11.0.3",
+    "stream-browserify": "^3.0.0",
+    "util": "^0.12.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.4.0",
@@ -47,6 +54,7 @@
     "path": "^0.12.7",
     "typescript": "~5.6.2",
     "url": "^0.11.4",
-    "vite": "^6.3.6"
+    "vite": "^6.3.6",
+    "vite-plugin-node-polyfills": "^0.24.0"
   }
 }

@@ -5,6 +5,7 @@
 
 // Standard library imports.
 use std::{
+    time::Duration,
     convert::Infallible,
     net::SocketAddr,
     sync::{
@@ -12,6 +13,7 @@ use std::{
         Arc,
     },
 };
+use tokio::time::timeout;
 
 // Third-party imports.
 use dashmap::DashMap;
@@ -32,6 +34,15 @@ use std::fs;
 
 // Import the Tauri plugins
 use tauri_plugin_dialog;
+
+fn add_cors_headers(res: &mut Response<Body>) {
+    let h = res.headers_mut();
+    h.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    h.insert("Access-Control-Allow-Headers", "*".parse().unwrap());
+    h.insert("Access-Control-Allow-Methods", "*".parse().unwrap());
+    h.insert("Access-Control-Expose-Headers", "*".parse().unwrap());
+    h.insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
+}
 
 // Add a command to save files using the standard Rust fs module
 #[tauri::command]
@@ -56,6 +67,80 @@ struct ProxyFetchResponse {
     status: u16,
     headers: Vec<(String, String)>,
     body: String,
+}
+
+/// Generic HTTPS proxy for problem origins (bypasses CORS and adds timeouts).
+#[tauri::command]
+async fn proxy_fetch_any(
+    method: String,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+    body: Option<String>,
+) -> Result<ProxyFetchResponse, String> {
+    // --- allowlist the origins we want to support ---
+    let allowed_hosts = [
+        "backend.2efa4b8fe4c2bd42083636871b007e9e.projects.babbage.systems",
+        "overlay-eu-1.bsvb.tech",
+        "overlay-ap-1.bsvb.tech",
+    ];
+
+    let u = Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
+    if u.scheme() != "https" {
+        return Err("only https is allowed".into());
+    }
+    if !allowed_hosts.iter().any(|h| u.host_str() == Some(*h)) {
+        return Err("host not allowed".into());
+    }
+
+    // Tight timeouts so dead endpoints can’t hang the UI
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8))
+        .user_agent("mnd-tauri-proxy/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut req = client
+        .request(
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?,
+            u,
+        );
+
+    // Forward headers (best-effort)
+    if let Some(hdrs) = headers {
+        let mut hm = reqwest::header::HeaderMap::new();
+        for (k, v) in hdrs {
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(&v),
+            ) {
+                hm.append(name, val);
+            }
+        }
+        req = req.headers(hm);
+    }
+
+    // Forward body
+    if let Some(b) = body {
+        // If looks like JSON and no content-type set, add one.
+        if b.trim_start().starts_with('{') || b.trim_start().starts_with('[') {
+            req = req.header(reqwest::header::CONTENT_TYPE, "application/json");
+        }
+        req = req.body(b);
+    }
+
+    let resp = req.send().await.map_err(|e| format!("upstream error: {e}"))?;
+    let status = resp.status().as_u16();
+
+    let mut headers_vec: Vec<(String, String)> = Vec::new();
+    for (k, v) in resp.headers().iter() {
+        headers_vec.push((k.as_str().to_string(), v.to_str().unwrap_or("").to_string()));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+
+    Ok(ProxyFetchResponse { status, headers: headers_vec, body })
 }
 
 #[tauri::command]
@@ -309,11 +394,13 @@ async fn download(app_handle: AppHandle, filename: String, content: Vec<u8>) -> 
     // Check if file exists and increment if necessary
     let mut counter = 1;
     while final_path.exists() {
-        let new_filename = if ext.is_empty() {
-            format!("{} ({}).{}", stem, counter, ext)
-        } else {
-            format!("{} ({}).{}", stem, counter, ext)
-        };
+          let new_filename = if ext.is_empty() {
+              // no extension → don't add a trailing dot
+              format!("{} ({})", stem, counter)
+          } else {
+              format!("{} ({}).{}", stem, counter, ext)
+          };
+
         final_path = path.clone();
         final_path.push(new_filename);
         counter += 1;
@@ -396,109 +483,103 @@ fn main() {
                                         let pending_requests = pending_requests.clone();
                                         let main_window = main_window.clone();
                                         let request_counter = request_counter.clone();
+async move {
+// ---- Fast-path CORS preflight
+if req.method() == hyper::Method::OPTIONS {
+    let mut res = Response::new(Body::empty());
+    add_cors_headers(&mut res);
+    return Ok::<_, Infallible>(res);
+}
 
-                                        async move {
+// ---- Built-in endpoints (avoid renderer dependency)
+let path = req.uri().path();
+if path == "/healthz" || path == "/getStatus" {
+    let mut res = Response::new(Body::from(r#"{"status":"ok","source":"mnd"}"#));
+    *res.status_mut() = StatusCode::OK;
+    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    add_cors_headers(&mut res);
+    return Ok::<_, Infallible>(res);
+}
+if path == "/getVersion" || path == "/version" {
+    let ver = env!("CARGO_PKG_VERSION");
+    let mut res = Response::new(Body::from(format!(r#"{{"version":"{}","source":"mnd"}}"#, ver)));
+    *res.status_mut() = StatusCode::OK;
+    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    add_cors_headers(&mut res);
+    return Ok::<_, Infallible>(res);
+}
 
-                                            // Intercept any OPTIONS requests
-                                            if req.method() == hyper::Method::OPTIONS {
-                                                let mut res = Response::new(Body::empty());
-                                                res.headers_mut().insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Headers", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Methods", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Expose-Headers", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
-                                                return Ok::<_, Infallible>(res);
-                                            }
+// ---- Normal path: forward to renderer with a timeout
+let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
 
-                                            // Generate a unique request ID.
-                                            let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
+let method = req.method().clone();
+let uri = req.uri().clone();
+let headers = req.headers().iter()
+    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+    .collect::<Vec<(String, String)>>();
 
-                                            // Extract the HTTP method, URI, and headers.
-                                            let method = req.method().clone();
-                                            let uri = req.uri().clone();
-                                            let headers = req.headers().iter()
-                                                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                                                .collect::<Vec<(String, String)>>();
+let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+let body_str = String::from_utf8_lossy(&whole_body).to_string();
 
-                                            // Read the full request body.
-                                            let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
-                                            let body_str = String::from_utf8_lossy(&whole_body).to_string();
+let (tx, rx) = oneshot::channel::<TsResponse>();
+pending_requests.insert(request_id, tx);
 
-                                            // Create a oneshot channel for awaiting the frontend response.
-                                            let (tx, rx) = oneshot::channel::<TsResponse>();
-                                            pending_requests.insert(request_id, tx);
+let event_payload = HttpRequestEvent {
+    method: method.to_string(),
+    path: uri.to_string(),
+    headers,
+    body: body_str,
+    request_id,
+};
 
-                                            // Prepare the event payload.
-                                            let event_payload = HttpRequestEvent {
-                                                method: method.to_string(),
-                                                path: uri.to_string(),
-                                                headers,
-                                                body: body_str,
-                                                request_id,
-                                            };
+let event_json = match serde_json::to_string(&event_payload) {
+    Ok(json) => json,
+    Err(e) => {
+        eprintln!("Failed to serialize HTTP event: {:?}", e);
+        let mut res = Response::new(Body::from("Internal Server Error"));
+        *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+        add_cors_headers(&mut res);
+        pending_requests.remove(&request_id);
+        return Ok::<_, Infallible>(res);
+    }
+};
 
-                                            // Serialize the payload to JSON.
-                                            let event_json = match serde_json::to_string(&event_payload) {
-                                                Ok(json) => json,
-                                                Err(e) => {
-                                                    eprintln!("Failed to serialize HTTP event: {:?}", e);
-                                                    let mut res = Response::new(Body::from("Internal Server Error"));
-                                                    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                                    // Append CORS headers
-                                                    res.headers_mut().insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Methods", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Expose-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
-                                                    // Remove pending request since we cannot proceed.
-                                                    pending_requests.remove(&request_id);
-                                                    return Ok::<_, Infallible>(res);
-                                                }
-                                            };
+if let Err(err) = main_window.emit("http-request", event_json) {
+    eprintln!("Failed to emit http-request event: {:?}", err);
+    pending_requests.remove(&request_id);
+    let mut res = Response::new(Body::from("Internal Server Error"));
+    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    add_cors_headers(&mut res);
+    return Ok::<_, Infallible>(res);
+}
 
-                                            // Emit the "http-request" event to the main window.
-                                            if let Err(err) = main_window.emit("http-request", event_json) {
-                                                eprintln!("Failed to emit http-request event: {:?}", err);
-                                                pending_requests.remove(&request_id);
-                                                let mut res = Response::new(Body::from("Internal Server Error"));
-                                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                                // Append CORS headers
-                                                res.headers_mut().insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Headers", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Methods", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Expose-Headers", "*".parse().unwrap());
-                                                res.headers_mut().insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
-                                                return Ok::<_, Infallible>(res);
-                                            }
+// **Key change**: bounded wait so callers never hang
+match timeout(Duration::from_millis(1500), rx).await {
+    Ok(Ok(ts_response)) => {
+        let mut res = Response::new(Body::from(ts_response.body));
+        *res.status_mut() = StatusCode::from_u16(ts_response.status).unwrap_or(StatusCode::OK);
+        add_cors_headers(&mut res);
+        Ok::<_, Infallible>(res)
+    }
+    Ok(Err(err)) => {
+        eprintln!("Renderer dropped for request {}: {:?}", request_id, err);
+        pending_requests.remove(&request_id);
+        let mut res = Response::new(Body::from(r#"{"error":"frontend-dropped"}"#));
+        *res.status_mut() = StatusCode::BAD_GATEWAY; // 502
+        add_cors_headers(&mut res);
+        Ok::<_, Infallible>(res)
+    }
+    Err(_elapsed) => {
+        eprintln!("Frontend timed out for request {}", request_id);
+        pending_requests.remove(&request_id);
+        let mut res = Response::new(Body::from(r#"{"error":"frontend-timeout"}"#));
+        *res.status_mut() = StatusCode::GATEWAY_TIMEOUT; // 504
+        add_cors_headers(&mut res);
+        Ok::<_, Infallible>(res)
+    }
+}
+}
 
-                                            // Wait asynchronously for the frontend's response.
-                                            match rx.await {
-                                                Ok(ts_response) => {
-                                                    let mut res = Response::new(Body::from(ts_response.body));
-                                                    *res.status_mut() = StatusCode::from_u16(ts_response.status)
-                                                        .unwrap_or(StatusCode::OK);
-                                                    // Append CORS headers
-                                                    res.headers_mut().insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Methods", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Expose-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
-                                                    Ok::<_, Infallible>(res)
-                                                }
-                                                Err(err) => {
-                                                    eprintln!("Error awaiting frontend response for request {}: {:?}", request_id, err);
-                                                    let mut res = Response::new(Body::from("Gateway Timeout"));
-                                                    *res.status_mut() = StatusCode::GATEWAY_TIMEOUT;
-                                                    // Append CORS headers
-                                                    res.headers_mut().insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Methods", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Expose-Headers", "*".parse().unwrap());
-                                                    res.headers_mut().insert("Access-Control-Allow-Private-Network", "true".parse().unwrap());
-                                                    Ok::<_, Infallible>(res)
-                                                }
-                                            }
-                                        }
                                     }))
                                 }
                             });
@@ -527,11 +608,11 @@ fn main() {
         relinquish_focus,
         download,
         save_file,
-        proxy_fetch_manifest
+        proxy_fetch_manifest,
+        proxy_fetch_any
     ])
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_shell::init())
-    .plugin(tauri_plugin_dialog::init())
     .run(tauri::generate_context!())
     .expect("Error while running Tauri application");
     }
