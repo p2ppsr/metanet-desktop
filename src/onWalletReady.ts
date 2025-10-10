@@ -58,7 +58,8 @@ function parseOrigin(req, headers: Record<string, string>): string {
 
 
 export const onWalletReady = async (wallet: WalletInterface): Promise<(() => void) | undefined> => {
-  return await listen('http-request', async (event) => {
+  const unlisten = await listen('http-request', async (event) => {
+  //return await listen('http-request', async (event) => {
     let response
 
     try {
@@ -797,4 +798,26 @@ export const onWalletReady = async (wallet: WalletInterface): Promise<(() => voi
       console.error("Error handling http-request event:", e)
     }
   })
+// ---- Announce bridge readiness immediately and with a couple of retries ----
+;(window as any).__mndBridgeReady = true
+
+const fire = () => {
+  if ((window as any).__mndBridgeAnnounced) return
+  try { (window as any).__mndAnnouncePresence?.() } catch {}
+  try { window.dispatchEvent(new CustomEvent('mnd:bridge-ready')) } catch {}
+  try { window.postMessage({ type: 'mnd:bridge-ready' }, '*') } catch {}
+}
+
+// fire now + micro/macro tasks; mark announced after next frame
+fire()                                     // sync
+setTimeout(fire, 0)                        // macrotask
+Promise.resolve().then(fire).catch(() => {}) // microtask
+requestAnimationFrame(() => {
+  fire()
+  ;(window as any).__mndBridgeAnnounced = true
+})
+setTimeout(() => { fire() }, 200)          // short retry before rAF in some cases
+setTimeout(() => { fire() }, 800)          // last retry if UI was late
+
+return unlisten
 }

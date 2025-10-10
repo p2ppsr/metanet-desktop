@@ -1,3 +1,4 @@
+// src-tauri/src/main.rs
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
@@ -77,22 +78,47 @@ async fn proxy_fetch_any(
     headers: Option<Vec<(String, String)>>,
     body: Option<String>,
 ) -> Result<ProxyFetchResponse, String> {
-    // --- allowlist the origins we want to support ---
-    let allowed_hosts = [
-        "backend.2efa4b8fe4c2bd42083636871b007e9e.projects.babbage.systems",
-        "overlay-eu-1.bsvb.tech",
-        "overlay-ap-1.bsvb.tech",
-    ];
-
+    // Parse & basic scheme guard
     let u = Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
     if u.scheme() != "https" {
         return Err("only https is allowed".into());
     }
-    if !allowed_hosts.iter().any(|h| u.host_str() == Some(*h)) {
-        return Err("host not allowed".into());
+
+    // Allow-list: accept exact hosts AND suffix patterns.
+    // Keep exacts for one-off domains; use suffixes for rotating project backends.
+    let host = u.host_str().ok_or("no host")?.to_ascii_lowercase();
+    let path = u.path().to_ascii_lowercase();
+
+    // Only allow the lookup endpoint through this proxy
+    if path != "/lookup" {
+        return Err(format!("path not allowed: {}", path));
     }
 
-    // Tight timeouts so dead endpoints can’t hang the UI
+    // Exact hosts you explicitly want to allow (optional)
+    let exact_allow: &[&str] = &[
+        // overlay hosts are usually blocked in JS and never reach here,
+        // but leaving them doesn't hurt:
+        "overlay-us-1.bsvb.tech",
+        "overlay-eu-1.bsvb.tech",
+        "overlay-ap-1.bsvb.tech",
+        "users.bapp.dev",
+    ];
+
+    // Suffixes to allow (this covers rotating hashed subdomains)
+    let suffix_allow: &[&str] = &[
+        ".projects.babbage.systems",
+        ".babbage.systems",
+    ];
+
+    let host_allowed =
+        exact_allow.iter().any(|h| *h == host) ||
+        suffix_allow.iter().any(|s| host.ends_with(s));
+
+    if !host_allowed {
+        return Err(format!("host not allowed: {}", host));
+    }
+
+    // Tight timeouts so dead endpoints don’t hang the UI
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(8))
@@ -100,6 +126,7 @@ async fn proxy_fetch_any(
         .build()
         .map_err(|e| e.to_string())?;
 
+    // Build upstream request
     let mut req = client
         .request(
             reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?,
@@ -122,13 +149,13 @@ async fn proxy_fetch_any(
 
     // Forward body
     if let Some(b) = body {
-        // If looks like JSON and no content-type set, add one.
         if b.trim_start().starts_with('{') || b.trim_start().starts_with('[') {
             req = req.header(reqwest::header::CONTENT_TYPE, "application/json");
         }
         req = req.body(b);
     }
 
+    // Send & collect response
     let resp = req.send().await.map_err(|e| format!("upstream error: {e}"))?;
     let status = resp.status().as_u16();
 
@@ -180,6 +207,38 @@ async fn proxy_fetch_manifest(url: String) -> Result<ProxyFetchResponse, String>
     let body = resp.text().await.map_err(|e| e.to_string())?;
 
     Ok(ProxyFetchResponse { status, headers: headers_vec, body })
+}
+
+#[tauri::command]
+async fn fetch_exrate(network: String) -> Result<String, String> {
+    // Accept "main" or "test"; default to main if weird input.
+    let net = match network.as_str() {
+        "test" | "testnet" => "test",
+        _ => "main",
+    };
+
+    let url = format!("https://api.whatsonchain.com/v1/bsv/{}/exchangerate", net);
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8))
+        .user_agent("mnd-exrate-proxy/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json, */*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("upstream status {}", status.as_u16()));
+    }
+    Ok(body)
 }
 
 static MAIN_WINDOW_NAME: &str = "main";
@@ -394,12 +453,12 @@ async fn download(app_handle: AppHandle, filename: String, content: Vec<u8>) -> 
     // Check if file exists and increment if necessary
     let mut counter = 1;
     while final_path.exists() {
-          let new_filename = if ext.is_empty() {
-              // no extension → don't add a trailing dot
-              format!("{} ({})", stem, counter)
-          } else {
-              format!("{} ({}).{}", stem, counter, ext)
-          };
+        let new_filename = if ext.is_empty() {
+            // no extension → don't add a trailing dot
+            format!("{} ({})", stem, counter)
+        } else {
+            format!("{} ({}).{}", stem, counter, ext)
+        };
 
         final_path = path.clone();
         final_path.push(new_filename);
@@ -483,103 +542,114 @@ fn main() {
                                         let pending_requests = pending_requests.clone();
                                         let main_window = main_window.clone();
                                         let request_counter = request_counter.clone();
-async move {
-// ---- Fast-path CORS preflight
-if req.method() == hyper::Method::OPTIONS {
-    let mut res = Response::new(Body::empty());
-    add_cors_headers(&mut res);
-    return Ok::<_, Infallible>(res);
-}
+                                        async move {
+                                            // ---- Fast-path CORS preflight
+                                            if req.method() == hyper::Method::OPTIONS {
+                                                let mut res = Response::new(Body::empty());
+                                                add_cors_headers(&mut res);
+                                                return Ok::<_, Infallible>(res);
+                                            }
 
-// ---- Built-in endpoints (avoid renderer dependency)
-let path = req.uri().path();
-if path == "/healthz" || path == "/getStatus" {
-    let mut res = Response::new(Body::from(r#"{"status":"ok","source":"mnd"}"#));
-    *res.status_mut() = StatusCode::OK;
-    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
-    add_cors_headers(&mut res);
-    return Ok::<_, Infallible>(res);
-}
-if path == "/getVersion" || path == "/version" {
-    let ver = env!("CARGO_PKG_VERSION");
-    let mut res = Response::new(Body::from(format!(r#"{{"version":"{}","source":"mnd"}}"#, ver)));
-    *res.status_mut() = StatusCode::OK;
-    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
-    add_cors_headers(&mut res);
-    return Ok::<_, Infallible>(res);
-}
+                                            // ---- Built-in endpoints (avoid renderer dependency)
+                                            let path = req.uri().path();
+                                            if path == "/healthz" || path == "/getStatus" {
+                                                let mut res = Response::new(Body::from(r#"{"status":"ok","source":"mnd"}"#));
+                                                *res.status_mut() = StatusCode::OK;
+                                                res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                                                add_cors_headers(&mut res);
+                                                return Ok::<_, Infallible>(res);
+                                            }
+                                            if path == "/getVersion" || path == "/version" {
+                                                let ver = env!("CARGO_PKG_VERSION");
+                                                let mut res = Response::new(Body::from(format!(r#"{{"version":"{}","source":"mnd"}}"#, ver)));
+                                                *res.status_mut() = StatusCode::OK;
+                                                res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                                                add_cors_headers(&mut res);
+                                                return Ok::<_, Infallible>(res);
+                                            }
 
-// ---- Normal path: forward to renderer with a timeout
-let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
+                                            // ---- Normal path: forward to renderer with a timeout
+                                            let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
 
-let method = req.method().clone();
-let uri = req.uri().clone();
-let headers = req.headers().iter()
-    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-    .collect::<Vec<(String, String)>>();
+                                            let method = req.method().clone();
+                                            let uri = req.uri().clone();
+                                            let headers = req.headers().iter()
+                                                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                                                .collect::<Vec<(String, String)>>();
 
-let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
-let body_str = String::from_utf8_lossy(&whole_body).to_string();
+                                            let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+                                            let body_str = String::from_utf8_lossy(&whole_body).to_string();
 
-let (tx, rx) = oneshot::channel::<TsResponse>();
-pending_requests.insert(request_id, tx);
+                                            let (tx, rx) = oneshot::channel::<TsResponse>();
+                                            pending_requests.insert(request_id, tx);
 
-let event_payload = HttpRequestEvent {
-    method: method.to_string(),
-    path: uri.to_string(),
-    headers,
-    body: body_str,
-    request_id,
-};
+                                            let event_payload = HttpRequestEvent {
+                                                method: method.to_string(),
+                                                path: uri.to_string(),
+                                                headers,
+                                                body: body_str,
+                                                request_id,
+                                            };
 
-let event_json = match serde_json::to_string(&event_payload) {
-    Ok(json) => json,
-    Err(e) => {
-        eprintln!("Failed to serialize HTTP event: {:?}", e);
-        let mut res = Response::new(Body::from("Internal Server Error"));
-        *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-        add_cors_headers(&mut res);
-        pending_requests.remove(&request_id);
-        return Ok::<_, Infallible>(res);
-    }
-};
+                                            let event_json = match serde_json::to_string(&event_payload) {
+                                                Ok(json) => json,
+                                                Err(e) => {
+                                                    eprintln!("Failed to serialize HTTP event: {:?}", e);
+                                                    let mut res = Response::new(Body::from("Internal Server Error"));
+                                                    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                                    add_cors_headers(&mut res);
+                                                    pending_requests.remove(&request_id);
+                                                    return Ok::<_, Infallible>(res);
+                                                }
+                                            };
 
-if let Err(err) = main_window.emit("http-request", event_json) {
-    eprintln!("Failed to emit http-request event: {:?}", err);
-    pending_requests.remove(&request_id);
-    let mut res = Response::new(Body::from("Internal Server Error"));
-    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-    add_cors_headers(&mut res);
-    return Ok::<_, Infallible>(res);
-}
+                                            if let Err(err) = main_window.emit("http-request", event_json) {
+                                                eprintln!("Failed to emit http-request event: {:?}", err);
+                                                pending_requests.remove(&request_id);
+                                                let mut res = Response::new(Body::from("Internal Server Error"));
+                                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                                add_cors_headers(&mut res);
+                                                return Ok::<_, Infallible>(res);
+                                            }
 
-// **Key change**: bounded wait so callers never hang
-match timeout(Duration::from_millis(1500), rx).await {
-    Ok(Ok(ts_response)) => {
-        let mut res = Response::new(Body::from(ts_response.body));
-        *res.status_mut() = StatusCode::from_u16(ts_response.status).unwrap_or(StatusCode::OK);
-        add_cors_headers(&mut res);
-        Ok::<_, Infallible>(res)
-    }
-    Ok(Err(err)) => {
-        eprintln!("Renderer dropped for request {}: {:?}", request_id, err);
-        pending_requests.remove(&request_id);
-        let mut res = Response::new(Body::from(r#"{"error":"frontend-dropped"}"#));
-        *res.status_mut() = StatusCode::BAD_GATEWAY; // 502
-        add_cors_headers(&mut res);
-        Ok::<_, Infallible>(res)
-    }
-    Err(_elapsed) => {
-        eprintln!("Frontend timed out for request {}", request_id);
-        pending_requests.remove(&request_id);
-        let mut res = Response::new(Body::from(r#"{"error":"frontend-timeout"}"#));
-        *res.status_mut() = StatusCode::GATEWAY_TIMEOUT; // 504
-        add_cors_headers(&mut res);
-        Ok::<_, Infallible>(res)
-    }
-}
-}
+                                            // **Key change**: bounded wait so callers never hang
+                                            match timeout(Duration::from_millis(1500), rx).await {
+                                                Ok(Ok(ts_response)) => {
+                                                    let mut res = Response::new(Body::from(ts_response.body.clone()));
+                                                    *res.status_mut() = StatusCode::from_u16(ts_response.status).unwrap_or(StatusCode::OK);
 
+                                                    // If body looks like JSON, set content-type for clients
+                                                    let b = ts_response.body.trim_start();
+                                                    if b.starts_with('{') || b.starts_with('[') {
+                                                        res.headers_mut().insert(
+                                                            hyper::header::CONTENT_TYPE,
+                                                            "application/json".parse().unwrap()
+                                                        );
+                                                    }
+
+                                                    add_cors_headers(&mut res);
+                                                    Ok::<_, Infallible>(res)
+                                                }
+                                                Ok(Err(err)) => {
+                                                    eprintln!("Renderer dropped for request {}: {:?}", request_id, err);
+                                                    pending_requests.remove(&request_id);
+                                                    let mut res = Response::new(Body::from(r#"{"error":"frontend-dropped"}"#));
+                                                    *res.status_mut() = StatusCode::BAD_GATEWAY; // 502
+                                                    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                                                    add_cors_headers(&mut res);
+                                                    Ok::<_, Infallible>(res)
+                                                }
+                                                Err(_elapsed) => {
+                                                    eprintln!("Frontend timed out for request {}", request_id);
+                                                    pending_requests.remove(&request_id);
+                                                    let mut res = Response::new(Body::from(r#"{"error":"frontend-timeout"}"#));
+                                                    *res.status_mut() = StatusCode::GATEWAY_TIMEOUT; // 504
+                                                    res.headers_mut().insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                                                    add_cors_headers(&mut res);
+                                                    Ok::<_, Infallible>(res)
+                                                }
+                                            }
+                                        }
                                     }))
                                 }
                             });
@@ -600,19 +670,21 @@ match timeout(Duration::from_millis(1500), rx).await {
             });
 
 
-        Ok(())
-    })
-    .invoke_handler(tauri::generate_handler![
-        is_focused,
-        request_focus,
-        relinquish_focus,
-        download,
-        save_file,
-        proxy_fetch_manifest,
-        proxy_fetch_any
-    ])
-    .plugin(tauri_plugin_opener::init())
-    .plugin(tauri_plugin_shell::init())
-    .run(tauri::generate_context!())
-    .expect("Error while running Tauri application");
-    }
+            Ok(())
+        })
+.invoke_handler(tauri::generate_handler![
+    is_focused,
+    request_focus,
+    relinquish_focus,
+    download,
+    save_file,
+    proxy_fetch_manifest,
+    proxy_fetch_any,
+    fetch_exrate
+])
+
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
+        .run(tauri::generate_context!())
+        .expect("Error while running Tauri application");
+}

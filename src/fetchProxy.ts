@@ -8,40 +8,40 @@ if (typeof window !== 'undefined') {
     g.__mndNetPatches = true
 
     // ---------- helpers ----------
-    const TRACKER_HOSTS = new Set<string>([
-      'overlay-eu-1.bsvb.tech',
-      'overlay-ap-1.bsvb.tech',
-      'backend.2efa4b8fe4c2bd42083636871b007e9e.projects.babbage.systems',
-    ])
-
+    function toURL(u: string): URL | null {
+      try { return new URL(u, window.location.href) } catch { return null }
+    }
     function isHttps(u: string): boolean {
-      try {
-        return new URL(u).protocol === 'https:'
-      } catch {
-        return false
-      }
+      const t = toURL(u); return t ? t.protocol === 'https:' : false
     }
     function hostOf(u: string): string {
-      try {
-        return new URL(u).hostname
-      } catch {
-        return ''
-      }
+      const t = toURL(u); return t ? t.hostname : ''
     }
     function pathOf(u: string): string {
-      try {
-        return new URL(u).pathname.toLowerCase()
-      } catch {
-        return ''
-      }
+      const t = toURL(u); return t ? t.pathname.toLowerCase() : ''
     }
     function isHttpsManifest(u: string): boolean {
       if (!isHttps(u)) return false
       const p = pathOf(u)
       return p.endsWith('/manifest.json') || p === '/manifest.json'
     }
-    function isLookup(u: string): boolean {
-      return pathOf(u) === '/lookup'
+    const isLookup = (u: string) => pathOf(u) === '/lookup'
+    const isOverlayHost = (h: string) => /^overlay-[a-z]+-\d+\.bsvb\.tech$/i.test(h)
+    // Any backend under *.projects.babbage.systems (and fallback *.babbage.systems)
+    const isBackendHost = (h: string) =>
+      /\.projects\.babbage\.systems$/i.test(h) || /\.babbage\.systems$/i.test(h)
+
+    // Return a valid empty JSON payload the UI can consume
+    function softJsonEmpty(): Response {
+      const body = JSON.stringify({ type: 'output-list', outputs: [] })
+      return new Response(body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-mnd-soft-fail': 'true',
+          'cache-control': 'no-store',
+        },
+      })
     }
 
     async function proxyManifest(url: string) {
@@ -53,10 +53,12 @@ if (typeof window !== 'undefined') {
     }
 
     async function proxyAny(method: string, url: string, init?: RequestInit) {
+      // collect headers
       const hdrs: Array<[string, string]> = []
       const h = new Headers(init?.headers || {})
       h.forEach((v, k) => hdrs.push([k, v]))
 
+      // best-effort body extraction (most lookups are GET anyway)
       let body: string | undefined
       if (init?.body != null) {
         if (typeof init.body === 'string') body = init.body
@@ -74,6 +76,7 @@ if (typeof window !== 'undefined') {
 
     // ---------- fetch() patch ----------
     const originalFetch = window.fetch.bind(window)
+    ;(window as any).__mndOriginalFetch = originalFetch
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url =
@@ -83,7 +86,31 @@ if (typeof window !== 'undefined') {
           ? input.toString()
           : (input as Request).url
 
-      // 1) Always proxy manifest.json over Tauri to bypass CORS + add timeouts
+      // Explicit bypass hook (kept for tooling)
+      const bypass = !!(init && new Headers(init.headers || {}).get('x-mnd-bypass'))
+      if (bypass) {
+        return originalFetch(input as any, init as any)
+      }
+
+      // Force overlay /lookup to be a network error so the SDK falls back to backend
+      if (isLookup(url) && isOverlayHost(hostOf(url))) {
+        console.warn('[MND] overlay lookup -> forcing network error to trigger backend fallback:', url)
+        return Promise.reject(new TypeError('Failed to fetch')) // simulate network error
+      }
+
+      // Proxy *any* backend /lookup (*.projects.babbage.systems) via Tauri to bypass CORS
+      if (isHttps(url) && isLookup(url) && isBackendHost(hostOf(url))) {
+        try {
+          console.info('[MND] proxying backend /lookup via tauri (fetch):', url)
+          const r = await proxyAny((init?.method || 'GET'), url, init)
+          return new Response(r.body ?? '', { status: r.status, headers: new Headers(r.headers) })
+        } catch (e) {
+          console.warn('[MND] backend /lookup via tauri FAILED (fetch); returning 200 empty JSON:', e, url)
+          return softJsonEmpty()
+        }
+      }
+
+      // Proxy HTTPS manifest.json
       if (isHttpsManifest(url)) {
         try {
           const r = await proxyManifest(url)
@@ -94,28 +121,11 @@ if (typeof window !== 'undefined') {
         }
       }
 
-      // 2) /lookup for known tracker hosts → try proxy, soft-fail on error
-      if (isHttps(url) && isLookup(url) && TRACKER_HOSTS.has(hostOf(url))) {
-        try {
-          const r = await proxyAny((init?.method || 'GET'), url, init)
-          return new Response(r.body, { status: r.status, headers: new Headers(r.headers) })
-        } catch (e) {
-          console.warn('[MND] proxy_fetch_any (lookup) failed; serving soft empty hosts:', e)
-          return new Response(JSON.stringify({ hosts: [] }), {
-            status: 200,
-            headers: {
-              'content-type': 'application/json',
-              'x-mnd-soft-fail': 'true',
-              'cache-control': 'no-store',
-            },
-          })
-        }
-      }
-
+      // Pass-through for everything else
       return originalFetch(input as any, init as any)
     }
 
-    // ---------- XMLHttpRequest patch (covers axios/XHR paths) ----------
+    // ---------- XMLHttpRequest patch ----------
     const OriginalXHR = window.XMLHttpRequest
 
     class ProxyXHR extends OriginalXHR {
@@ -128,12 +138,16 @@ if (typeof window !== 'undefined') {
         this.__mnd_url = url
         this.__mnd_headers = {}
 
-        // For non-intercepted requests, pass through
-        if (!(isHttpsManifest(url) || (isHttps(url) && isLookup(url) && TRACKER_HOSTS.has(hostOf(url))))) {
+        const h = hostOf(url)
+        const intercept =
+          isHttpsManifest(url) ||
+          (isLookup(url) && (isOverlayHost(h) || (isHttps(url) && isBackendHost(h))))
+
+        if (!intercept) {
           return super.open(method, url, async ?? true, user as any, password as any)
         }
 
-        // Keep XHR state machine happy; we'll short-circuit in send()
+        // Intercepted: fulfill later
         super.open(method, 'about:blank', async ?? true, user as any, password as any)
       }
 
@@ -154,7 +168,7 @@ if (typeof window !== 'undefined') {
         ;(this as any).getResponseHeader = (n: string) => headersMap.get(String(n || '').toLowerCase()) ?? null
         Object.defineProperty(this, 'responseText', { value: body })
         Object.defineProperty(this, 'response', { value: body })
-        ;(this as any).readyState = 4 // DONE
+        ;(this as any).readyState = 4
         this.dispatchEvent(new Event('readystatechange'))
         this.dispatchEvent(new Event('load'))
         if (typeof (this as any).onload === 'function') (this as any).onload!(new Event('load') as any)
@@ -166,47 +180,57 @@ if (typeof window !== 'undefined') {
         const method = this.__mnd_method
         if (!url) return super.send(body as any)
 
-        const interceptManifest = isHttpsManifest(url)
-        const interceptLookup = isHttps(url) && isLookup(url) && TRACKER_HOSTS.has(hostOf(url))
+        const h = hostOf(url)
 
-        if (!interceptManifest && !interceptLookup) {
-          return super.send(body as any)
+        // Overlay lookups: simulate network error so fallback runs
+        if (isLookup(url) && isOverlayHost(h)) {
+          console.warn('[MND] overlay XHR lookup -> forcing network error to trigger backend fallback:', url)
+          // Network error semantics for XHR: status stays 0, fire `error`, then `loadend`
+          ;(this as any).readyState = 4
+          this.dispatchEvent(new ProgressEvent('error'))
+          this.dispatchEvent(new Event('loadend'))
+          return
         }
 
-        try {
-          if (interceptManifest) {
+        // Backend lookup: proxy via Tauri for any *.projects.babbage.systems
+        if (isHttps(url) && isLookup(url) && isBackendHost(h)) {
+          try {
+            console.info('[MND] proxying backend /lookup via tauri (XHR):', url)
+            const init: RequestInit = { method, headers: this.__mnd_headers }
+            if (body != null) {
+              if (typeof body === 'string') init.body = body
+              else if (body instanceof Blob) init.body = await body.text()
+            }
+            const r = await proxyAny(method, url, init)
+            return this.fulfillWith(r.status, r.body ?? '', r.headers, url)
+          } catch (e) {
+            console.warn('[MND] backend /lookup via tauri FAILED (XHR); 200 empty JSON:', e, url)
+            return this.fulfillWith(
+              200,
+              JSON.stringify({ type: 'output-list', outputs: [] }),
+              [['content-type', 'application/json'], ['x-mnd-soft-fail', 'true'], ['cache-control', 'no-store']],
+              url
+            )
+          }
+        }
+
+        // Manifest: proxy via Tauri
+        if (isHttpsManifest(url)) {
+          try {
             const r = await proxyManifest(url)
             return this.fulfillWith(r.status, r.body, r.headers, url)
-          } else {
-            // lookup → try proxy, soft-fail on error
-            try {
-              const init: RequestInit = { method }
-              if (Object.keys(this.__mnd_headers).length) init.headers = this.__mnd_headers
-              if (body != null) {
-                if (typeof body === 'string') init.body = body
-                else if (body instanceof Blob) init.body = await body.text()
-              }
-              const r = await proxyAny(method, url, init)
-              return this.fulfillWith(r.status, r.body, r.headers, url)
-            } catch (e) {
-              console.warn('[MND] proxy (XHR lookup) failed; serving soft empty hosts:', e)
-              return this.fulfillWith(
-                200,
-                '{"hosts":[]}',
-                [['content-type', 'application/json'], ['x-mnd-soft-fail', 'true']],
-                url
-              )
-            }
+          } catch {
+            // fall back to native XHR if proxy fails
+            return super.send(body as any)
           }
-        } catch (_e) {
-          // If manifest proxy fails, fall back to native XHR
-          return super.send(body as any)
         }
+
+        // Not intercepted
+        return super.send(body as any)
       }
     }
 
     try {
-      // Install our XHR shim
       ;(window as any).XMLHttpRequest = ProxyXHR
     } catch (e) {
       console.warn('[MND] Unable to patch XMLHttpRequest:', e)
@@ -224,6 +248,6 @@ if (typeof window !== 'undefined') {
       }
     } catch {}
 
-    console.info('[MND] manifest + lookup proxy (fetch + XHR) active')
+    console.info('[MND] manifest + generalized backend /lookup proxy active (overlay lookups force network error)')
   }
 }
